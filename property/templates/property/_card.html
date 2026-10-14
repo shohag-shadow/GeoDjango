@@ -1,12 +1,19 @@
 <article class="card">
   <a href="{% url 'property:detail' p.slug %}" class="card-image">
-    {% with img=p.images.first %}
-      {% if img %}
-        <img src="{{ img.image.url }}" alt="{{ img.alt_text|default:p.title }}">
-      {% else %}
-        <div class="card-noimage">No image</div>
-      {% endif %}
-    {% endwith %}
+    {% if p.image_url %}
+      <div class="card-noimage" hidden>No image</div>
+      <img src="{{ p.image_url }}" alt="{{ p.title }}" loading="lazy"
+           referrerpolicy="no-referrer"
+           onerror="this.hidden = true; this.previousElementSibling.hidden = false;">
+    {% else %}
+      {% with img=p.images.first %}
+        {% if img %}
+          <img src="{{ img.image.url }}" alt="{{ img.alt_text|default:p.title }}" loading="lazy">
+        {% else %}
+          <div class="card-noimage">No image</div>
+        {% endif %}
+      {% endwith %}
+    {% endif %}
   </a>
   <div class="card-body">
     <h3><a href="{% url 'property:detail' p.slug %}">{{ p.title|truncatechars:60 }}</a></h3>

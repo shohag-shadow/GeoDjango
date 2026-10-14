@@ -1,0 +1,94 @@
+{% comment %}
+Single merged search bar.
+
+One text input drives location/place search, property-type filtering and
+free-text (semantic) property search. While typing, the field suggests both
+matching destinations (semantic API) and property types; picking a destination
+stores its id in the hidden `location` field so the exact place is honoured,
+while picking a property type appends it to the bar (the backend parses it).
+{% endcomment %}
+<div class="field field-wide autocomplete-wrap">
+  <label for="id_q">Where to?</label>
+  {{ form.q }}
+  {{ form.location }}
+  <div id="search-results" class="autocomplete-results" hidden></div>
+</div>
+
+{% if resolved_location and not form.q.value %}
+<script>
+  // Landed from a destination link (?location=pk) — show the place name.
+  document.getElementById("id_q").value = "{{ resolved_location.name|escapejs }}";
+</script>
+{% endif %}
+
+<script>
+(function () {
+  const input   = document.getElementById("id_q");
+  const results = document.getElementById("search-results");
+  const hidden  = document.getElementById("id_location");
+  if (!input || !results || !hidden) return;
+
+  let timer = null;
+
+  input.addEventListener("input", () => {
+    // Typing invalidates a previously picked suggestion; the backend will
+    // resolve the text into a place (or fall back to semantic search).
+    hidden.value = "";
+    clearTimeout(timer);
+    const q = input.value.trim();
+    if (!q) { results.hidden = true; return; }
+    timer = setTimeout(() => fetchLocations(q), 180);
+  });
+
+  async function fetchLocations(q) {
+    try {
+      const res  = await fetch(`/api/locations/autocomplete/?q=${encodeURIComponent(q)}&limit=8`);
+      const data = await res.json();
+      render(data.results || []);
+    } catch (err) {
+      results.hidden = true;
+    }
+  }
+
+  function render(items) {
+    if (!items.length) { results.hidden = true; return; }
+    results.innerHTML = "";
+    items.forEach(item => {
+      const div = document.createElement("div");
+      div.className = "autocomplete-item";
+
+      const label = document.createElement("span");
+      label.textContent = item.label;
+      div.appendChild(label);
+
+      if (item.type === "property_type") {
+        const tag = document.createElement("span");
+        tag.className = "autocomplete-tag";
+        tag.textContent = "stay type";
+        div.appendChild(tag);
+      }
+
+      div.addEventListener("click", () => {
+        if (item.type === "property_type") {
+          // Append the type to the bar; the backend parses it out of `q`.
+          const base = input.value.replace(/,\s*$/, "").trim();
+          input.value = base ? `${base}, ${item.label}` : item.label;
+        } else {
+          input.value = item.label;
+          hidden.value = item.id;
+        }
+        results.hidden = true;
+      });
+      results.appendChild(div);
+    });
+    results.hidden = false;
+  }
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") results.hidden = true;
+  });
+  document.addEventListener("click", (e) => {
+    if (!results.contains(e.target) && e.target !== input) results.hidden = true;
+  });
+})();
+</script>

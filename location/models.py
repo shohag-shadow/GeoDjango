@@ -4,7 +4,7 @@ from pgvector.django import HnswIndex, VectorField
 
 class Location(models.Model):
     name = models.CharField(max_length=255)
-    slug = models.SlugField(unique=True)
+    slug = models.SlugField(max_length=255, unique=True)
     country = models.CharField(max_length=100)
     state = models.CharField(max_length=100, blank=True)
     city = models.CharField(max_length=100)

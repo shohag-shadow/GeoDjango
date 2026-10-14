@@ -1,10 +1,12 @@
+import ast
+import json
 import re
 from pathlib import Path
 
 import pandas as pd
 from django.contrib.gis.geos import Point
 from django.core.management.base import BaseCommand, CommandError
-from django.db import transaction
+from django.db import connection, transaction
 from django.utils.html import strip_tags
 from django.utils.text import slugify
 
@@ -12,6 +14,20 @@ from embeddings import embed_texts
 from location.models import Location
 from property.models import Property
 
+
+def read_dataframe(path: Path) -> pd.DataFrame:
+    """Load a CSV, Parquet or Excel file into a DataFrame (auto-detected)."""
+    suffix = path.suffix.lower()
+    if suffix in (".csv", ".txt", ".tsv"):
+        sep = "\t" if suffix == ".tsv" else ","
+        return pd.read_csv(path, low_memory=False, sep=sep)
+    if suffix in (".parquet", ".pq"):
+        return pd.read_parquet(path)
+    if suffix in (".xlsx", ".xls", ".xlsm"):
+        return pd.read_excel(path)
+    raise CommandError(
+        f"Unsupported file type '{suffix}'. Use CSV, Parquet or Excel."
+    )
 
 
 def parse_price(v):
@@ -47,6 +63,33 @@ def to_float(v):
         return float(str(v).strip())
     except (TypeError, ValueError):
         return None
+
+
+def parse_amenities(v):
+    """
+    Normalise the Airbnb `amenities` column into a list[str].
+
+    Handles: already-parsed lists (Parquet), JSON strings, Python-repr strings
+    and comma separated plain text.
+    """
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return []
+    if isinstance(v, (list, tuple, set)):
+        return [str(x).strip() for x in v if str(x).strip()]
+
+    text = str(v).strip()
+    if not text:
+        return []
+
+    for loader in (json.loads, ast.literal_eval):
+        try:
+            parsed = loader(text)
+            if isinstance(parsed, (list, tuple, set)):
+                return [str(x).strip() for x in parsed if str(x).strip()]
+        except (ValueError, SyntaxError):
+            continue
+
+    return [part.strip() for part in text.split(",") if part.strip()]
 
 
 def extract_point(row):
@@ -106,29 +149,36 @@ def extract_bathrooms(row):
 # ---------------------------------------------------------------------
 
 class Command(BaseCommand):
-    help = "Import Inside Airbnb listings with MiniLM embeddings."
+    help = (
+        "Import vacation-rental listings (CSV, Parquet or Excel) with "
+        "MiniLM embeddings."
+    )
 
     def add_arguments(self, parser):
-        parser.add_argument("csv_path")
+        parser.add_argument("path", help="CSV, Parquet or Excel file to import.")
         parser.add_argument("--country", required=True)
         parser.add_argument("--state", default="")
         parser.add_argument("--city", required=True)
         parser.add_argument("--dry-run", action="store_true")
         parser.add_argument("--no-embed", action="store_true")
+        parser.add_argument(
+            "--reembed", action="store_true",
+            help="Rebuild embeddings for every property of this location.",
+        )
 
     def handle(self, *args, **options):
-        path = Path(options["csv_path"])
+        path = Path(options["path"])
         if not path.exists():
             raise CommandError(f"File not found: {path}")
 
-        df = pd.read_csv(path, low_memory=False)
+        df = read_dataframe(path)
 
         # Sanity print — helps when a column is missing
         wanted = ["latitude", "longitude", "bathrooms", "bathrooms_text",
-                  "bedrooms", "price"]
+                  "bedrooms", "price", "amenities", "picture_url"]
         present = [c for c in wanted if c in df.columns]
         missing = [c for c in wanted if c not in df.columns]
-        self.stdout.write(f"Loaded {len(df)} rows")
+        self.stdout.write(f"Loaded {len(df)} rows from {path.name}")
         self.stdout.write(f"Columns found: {present}")
         if missing:
             self.stdout.write(self.style.WARNING(f"Missing: {missing}"))
@@ -157,8 +207,17 @@ class Command(BaseCommand):
             f"Properties +{created} updated {updated} | Skipped {skipped}"
         ))
 
+        # Derive spatial geometry for the Location from its properties so that
+        # DWithin / Intersects queries (radius search, distance-to-city,
+        # nearby properties) have something to work with.
+        self._location_geometry(location)
+
         if options["no_embed"]:
             return
+
+        if options["reembed"]:
+            cleared = Property.objects.filter(location=location).update(embedding=None)
+            self.stdout.write(f"--reembed: cleared {cleared} embeddings.")
 
         self._embed(location)
 
@@ -186,12 +245,14 @@ class Command(BaseCommand):
             "location": location,
             "title": title,
             "description": clean(row.get("description")),
+            "amenities": parse_amenities(row.get("amenities")),
             "property_type": clean(row.get("property_type")),
             "status": "for_rent",
             "price": parse_price(row.get("price")),
             "bedrooms": int_or_zero(row.get("bedrooms")),
             "bathrooms": extract_bathrooms(row),
             "address": clean(row.get("neighbourhood_cleansed")),
+            "image_url": clean(row.get("picture_url"))[:500],
             "is_active": True,
         }
 
@@ -203,7 +264,58 @@ class Command(BaseCommand):
 
     # ------------------------------------------------------------------
 
+    def _location_geometry(self, location):
+        """Set the location's representative point (centroid) and boundary (hull)."""
+        with connection.cursor() as cur:
+            cur.execute(
+                """
+                SELECT AVG(ST_Y(point::geometry)), AVG(ST_X(point::geometry))
+                FROM property_property
+                WHERE location_id = %s AND point IS NOT NULL
+                """,
+                [location.pk],
+            )
+            lat, lon = cur.fetchone()
+
+            if lat is None or lon is None:
+                self.stdout.write(self.style.WARNING(
+                    "No property coordinates — location geometry left empty."
+                ))
+                return
+
+            location.point = Point(lon, lat, srid=4326)
+            location.save(update_fields=["point"])
+
+            # Convex hull of every listing → a polygon boundary for Intersects.
+            cur.execute(
+                """
+                UPDATE location_location l
+                SET boundary = sub.hull
+                FROM (
+                    SELECT ST_Multi(ST_ConvexHull(ST_Collect(point::geometry)))
+                             ::geometry(MultiPolygon, 4326) AS hull
+                    FROM property_property
+                    WHERE location_id = %s AND point IS NOT NULL
+                    HAVING COUNT(*) >= 3
+                ) sub
+                WHERE l.id = %s
+                """,
+                [location.pk, location.pk],
+            )
+
+        location.refresh_from_db(fields=["point", "boundary"])
+        self.stdout.write(
+            f"Location geometry → point=({location.point.y:.4f}, "
+            f"{location.point.x:.4f}) boundary={'yes' if location.boundary else 'no'}"
+        )
+
+    # ------------------------------------------------------------------
+
     def _embed(self, location):
+        # Keep the location vector focused on the place identity itself — mixing
+        # in dozens of neighbourhood names dilutes it and breaks queries like
+        # "Albany, New York". Neighbourhoods are carried by the *property*
+        # embeddings below instead, which is where they actually help.
         location.embedding = embed_texts(
             [f"{location.name}, {location.state}, {location.country}".strip(", ")]
         )[0]
@@ -222,7 +334,9 @@ class Command(BaseCommand):
             vecs = embed_texts([
                 "\n\n".join(x for x in [
                     p.title,
-                    f"{p.property_type} in {p.location.city}, {p.location.country}",
+                    f"{p.property_type} in {p.address + ', ' if p.address else ''}"
+                    f"{p.location.city}, {p.location.state}, {p.location.country}",
+                    " ".join(p.amenities or []),
                     p.description,
                 ] if x)
                 for p in batch

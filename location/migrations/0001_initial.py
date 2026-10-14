@@ -5,6 +5,8 @@ import pgvector.django.indexes
 import pgvector.django.vector
 from django.db import migrations, models
 
+from pgvector.django import VectorExtension
+
 
 class Migration(migrations.Migration):
 
@@ -14,6 +16,9 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        # Ensure the pgvector extension exists before any vector column is created.
+        # This also runs automatically on the test database.
+        VectorExtension(),
         migrations.CreateModel(
             name='Location',
             fields=[

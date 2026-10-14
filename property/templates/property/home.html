@@ -5,43 +5,10 @@
 
 <section class="hero">
   <h1>Find your next stay</h1>
-  <form method="get" action="{% url 'property:search' %}" class="search-form">
+  {# Homepage is just the search bar — all filters live on the results page. #}
+  <form method="get" action="{% url 'property:search' %}" class="search-form search-form-simple">
     <div class="search-grid">
-      <div class="field field-wide">
-        {{ form.q.label_tag }}
-        {{ form.q }}
-      </div>
-     <div class="field autocomplete-wrap">
-      <label for="loc-input">Location</label>
-      <input type="text" id="loc-input" class="form-input"
-         placeholder="Type a city, beach, neighbourhood..." autocomplete="off">
-       <div id="loc-results" class="autocomplete-results" hidden></div>
-      <div style="display:none;">{{ form.location }}</div>
-    </div>
-      <div class="field">
-        {{ form.radius_km.label_tag }}
-        {{ form.radius_km }}
-      </div>
-      <div class="field">
-        {{ form.property_type.label_tag }}
-        {{ form.property_type }}
-      </div>
-      <div class="field">
-        {{ form.min_price.label_tag }}
-        {{ form.min_price }}
-      </div>
-      <div class="field">
-        {{ form.max_price.label_tag }}
-        {{ form.max_price }}
-      </div>
-      <div class="field">
-        {{ form.bedrooms.label_tag }}
-        {{ form.bedrooms }}
-      </div>
-      <div class="field">
-        {{ form.bathrooms.label_tag }}
-        {{ form.bathrooms }}
-      </div>
+      {% include "property/_searchbar.html" %}
       <div class="field">
         <button type="submit" class="btn btn-primary">Search</button>
       </div>

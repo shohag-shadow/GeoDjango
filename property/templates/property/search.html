@@ -8,21 +8,29 @@
 
   <form method="get" class="search-form">
     <div class="search-grid">
-      <div class="field field-wide">{{ form.q.label_tag }}{{ form.q }}</div>
-      <div class="field">{{ form.location.label_tag }}{{ form.location }}</div>
-      <div class="field">{{ form.radius_km.label_tag }}{{ form.radius_km }}</div>
+      {% include "property/_searchbar.html" %}
       <div class="field">{{ form.property_type.label_tag }}{{ form.property_type }}</div>
       <div class="field">{{ form.min_price.label_tag }}{{ form.min_price }}</div>
       <div class="field">{{ form.max_price.label_tag }}{{ form.max_price }}</div>
       <div class="field">{{ form.bedrooms.label_tag }}{{ form.bedrooms }}</div>
-      <div class="field">{{ form.bathrooms.label_tag }}{{ form.bathrooms }}</div>
       <div class="field"><button class="btn btn-primary" type="submit">Search</button></div>
     </div>
   </form>
 </section>
 
 <section class="section">
-  <p class="muted">{{ total }} result{{ total|pluralize }}</p>
+  {{ form.non_field_errors }}
+  <p class="muted">
+    {{ total }} result{{ total|pluralize }}
+    {% if resolved_location %}
+      · near <strong>{{ resolved_location.city }}, {{ resolved_location.country }}</strong>
+    {% elif semantic_used %}
+      · best semantic matches for “{{ form.q.value }}”
+    {% endif %}
+    {% if resolved_property_type %}
+      · <strong>{{ resolved_property_type }}</strong>
+    {% endif %}
+  </p>
 
   {% if page.object_list %}
     <div class="grid grid-3">
@@ -48,53 +56,3 @@
 </section>
 
 {% endblock %}
-
-
-<script>
-(function () {
-  const input   = document.getElementById("loc-input");
-  const results = document.getElementById("loc-results");
-  const select  = document.querySelector("select[name='location']");
-  if (!input || !results || !select) return;
-
-  if (select.value) {
-    const opt = select.options[select.selectedIndex];
-    if (opt) input.value = opt.text;
-  }
-
-  let timer = null;
-  input.addEventListener("input", () => {
-    clearTimeout(timer);
-    const q = input.value.trim();
-    if (!q) { select.value = ""; results.hidden = true; return; }
-    timer = setTimeout(() => fetchLocs(q), 200);
-  });
-
-  async function fetchLocs(q) {
-    const res  = await fetch(`/api/locations/autocomplete/?q=${encodeURIComponent(q)}&limit=8`);
-    const data = await res.json();
-    render(data.results);
-  }
-
-  function render(items) {
-    if (!items.length) { results.hidden = true; return; }
-    results.innerHTML = "";
-    items.forEach(item => {
-      const div = document.createElement("div");
-      div.className = "autocomplete-item";
-      div.textContent = item.label;
-      div.addEventListener("click", () => {
-        input.value = item.label;
-        select.value = item.id;
-        results.hidden = true;
-      });
-      results.appendChild(div);
-    });
-    results.hidden = false;
-  }
-
-  document.addEventListener("click", (e) => {
-    if (!results.contains(e.target) && e.target !== input) results.hidden = true;
-  });
-})();
-</script>
