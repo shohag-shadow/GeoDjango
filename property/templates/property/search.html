@@ -48,3 +48,53 @@
 </section>
 
 {% endblock %}
+
+
+<script>
+(function () {
+  const input   = document.getElementById("loc-input");
+  const results = document.getElementById("loc-results");
+  const select  = document.querySelector("select[name='location']");
+  if (!input || !results || !select) return;
+
+  if (select.value) {
+    const opt = select.options[select.selectedIndex];
+    if (opt) input.value = opt.text;
+  }
+
+  let timer = null;
+  input.addEventListener("input", () => {
+    clearTimeout(timer);
+    const q = input.value.trim();
+    if (!q) { select.value = ""; results.hidden = true; return; }
+    timer = setTimeout(() => fetchLocs(q), 200);
+  });
+
+  async function fetchLocs(q) {
+    const res  = await fetch(`/api/locations/autocomplete/?q=${encodeURIComponent(q)}&limit=8`);
+    const data = await res.json();
+    render(data.results);
+  }
+
+  function render(items) {
+    if (!items.length) { results.hidden = true; return; }
+    results.innerHTML = "";
+    items.forEach(item => {
+      const div = document.createElement("div");
+      div.className = "autocomplete-item";
+      div.textContent = item.label;
+      div.addEventListener("click", () => {
+        input.value = item.label;
+        select.value = item.id;
+        results.hidden = true;
+      });
+      results.appendChild(div);
+    });
+    results.hidden = false;
+  }
+
+  document.addEventListener("click", (e) => {
+    if (!results.contains(e.target) && e.target !== input) results.hidden = true;
+  });
+})();
+</script>

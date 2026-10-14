@@ -11,10 +11,13 @@
         {{ form.q.label_tag }}
         {{ form.q }}
       </div>
-      <div class="field">
-        {{ form.location.label_tag }}
-        {{ form.location }}
-      </div>
+     <div class="field autocomplete-wrap">
+      <label for="loc-input">Location</label>
+      <input type="text" id="loc-input" class="form-input"
+         placeholder="Type a city, beach, neighbourhood..." autocomplete="off">
+       <div id="loc-results" class="autocomplete-results" hidden></div>
+      <div style="display:none;">{{ form.location }}</div>
+    </div>
       <div class="field">
         {{ form.radius_km.label_tag }}
         {{ form.radius_km }}

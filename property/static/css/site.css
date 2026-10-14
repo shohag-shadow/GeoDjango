@@ -439,3 +439,39 @@ a:hover {
 select.form-select {
     color-scheme: dark;
 }
+
+
+.autocomplete-wrap {
+    position: relative;
+}
+
+.autocomplete-results {
+    position: absolute;
+    z-index: 30;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    background: var(--card-bg);
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    max-height: 280px;
+    overflow-y: auto;
+    box-shadow: var(--shadow);
+}
+
+.autocomplete-item {
+    padding: 0.55rem 0.75rem;
+    cursor: pointer;
+    font-size: 0.9rem;
+    color: var(--fg);
+    border-bottom: 1px solid var(--border);
+}
+
+.autocomplete-item:last-child {
+    border-bottom: none;
+}
+
+.autocomplete-item:hover {
+    background: var(--card-hover);
+    color: var(--accent-hover);
+}
