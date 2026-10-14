@@ -1,14 +1,15 @@
 from django.conf import settings
 from django.conf.urls.static import static
 from django.contrib import admin
-from django.urls import path
+from django.urls import include, path
 
-admin.site.site_header = settings.ADMIN_SITE_HEADER
-admin.site.site_title = settings.ADMIN_SITE_TITLE
-admin.site.index_title = settings.ADMIN_INDEX_TITLE
+admin.site.site_header = "Vacation Rentals Admin"
+admin.site.site_title = "Vacation Rentals"
+admin.site.index_title = "Manage locations, properties, and images"
 
 urlpatterns = [
     path("admin/", admin.site.urls),
+    path("", include("property.urls")),
 ]
 
 if settings.DEBUG:

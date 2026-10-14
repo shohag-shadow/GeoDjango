@@ -1,0 +1,88 @@
+{% extends "property/base.html" %}
+{% block title %}{{ property.title }}{% endblock %}
+
+{% block content %}
+
+<article class="detail">
+
+  <header class="detail-header">
+    <h1>{{ property.title }}</h1>
+    <p class="muted">
+      {{ property.property_type|title }} in
+      <strong>{{ property.location.city }}</strong>,
+      {{ property.location.country }}
+    </p>
+
+    {% if distance_km is not None %}
+      <p class="distance-badge">
+        📍 {{ distance_km }} km from {{ property.location.city }} city centre
+      </p>
+    {% endif %}
+  </header>
+
+  {% if images %}
+    <div class="gallery">
+      {% for img in images %}
+        <img src="{{ img.image.url }}"
+             alt="{{ img.alt_text|default:property.title }}"
+             class="gallery-img{% if img.is_primary %} primary{% endif %}">
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  <div class="detail-grid">
+
+    <div class="detail-main">
+      <section class="section">
+        <h2>About this place</h2>
+        <p>{{ property.description|linebreaks }}</p>
+      </section>
+
+      {% if property.amenities %}
+        <section class="section">
+          <h2>Amenities</h2>
+          <ul class="amenity-list">
+            {% for a in property.amenities %}
+              <li>{{ a }}</li>
+            {% endfor %}
+          </ul>
+        </section>
+      {% endif %}
+    </div>
+
+    <aside class="detail-side">
+      <div class="booking-card">
+        <p class="price-big">${{ property.price|floatformat:0 }}<span class="muted">/night</span></p>
+        <ul class="facts">
+          <li><strong>{{ property.bedrooms }}</strong> bedrooms</li>
+          <li><strong>{{ property.bathrooms }}</strong> bathrooms</li>
+          {% if property.area_sqft %}
+            <li><strong>{{ property.area_sqft|floatformat:0 }}</strong> sq ft</li>
+          {% endif %}
+        </ul>
+
+        {% if property.point %}
+          <p class="muted">
+            Coordinates: {{ property.point.y|floatformat:4 }},
+            {{ property.point.x|floatformat:4 }}
+          </p>
+        {% endif %}
+      </div>
+    </aside>
+
+  </div>
+
+  {% if similar %}
+    <section class="section">
+      <h2>More stays in {{ property.location.city }}</h2>
+      <div class="grid grid-3">
+        {% for p in similar %}
+          {% include "property/_card.html" with p=p %}
+        {% endfor %}
+      </div>
+    </section>
+  {% endif %}
+
+</article>
+
+{% endblock %}

@@ -1,0 +1,75 @@
+{% extends "property/base.html" %}
+{% block title %}Find your next stay{% endblock %}
+
+{% block content %}
+
+<section class="hero">
+  <h1>Find your next stay</h1>
+  <form method="get" action="{% url 'property:search' %}" class="search-form">
+    <div class="search-grid">
+      <div class="field field-wide">
+        {{ form.q.label_tag }}
+        {{ form.q }}
+      </div>
+      <div class="field">
+        {{ form.location.label_tag }}
+        {{ form.location }}
+      </div>
+      <div class="field">
+        {{ form.radius_km.label_tag }}
+        {{ form.radius_km }}
+      </div>
+      <div class="field">
+        {{ form.property_type.label_tag }}
+        {{ form.property_type }}
+      </div>
+      <div class="field">
+        {{ form.min_price.label_tag }}
+        {{ form.min_price }}
+      </div>
+      <div class="field">
+        {{ form.max_price.label_tag }}
+        {{ form.max_price }}
+      </div>
+      <div class="field">
+        {{ form.bedrooms.label_tag }}
+        {{ form.bedrooms }}
+      </div>
+      <div class="field">
+        {{ form.bathrooms.label_tag }}
+        {{ form.bathrooms }}
+      </div>
+      <div class="field">
+        <button type="submit" class="btn btn-primary">Search</button>
+      </div>
+    </div>
+  </form>
+</section>
+
+{% if featured %}
+<section class="section">
+  <h2>Featured stays</h2>
+  <div class="grid grid-3">
+    {% for p in featured %}
+      {% include "property/_card.html" with p=p %}
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+{% if popular_locations %}
+<section class="section">
+  <h2>Popular destinations</h2>
+  <ul class="pill-list">
+    {% for loc in popular_locations %}
+      <li>
+        <a href="{% url 'property:search' %}?location={{ loc.pk }}" class="pill">
+          {{ loc.name }} <span class="muted">({{ loc.property_count }})</span>
+        </a>
+      </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+{% endblock %}

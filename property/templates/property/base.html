@@ -1,0 +1,29 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Vacation Rentals{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'css/site.css' %}">
+</head>
+<body>
+
+<header class="site-header">
+  <a href="{% url 'property:home' %}" class="brand">Vacation Rentals</a>
+  <nav>
+    <a href="{% url 'property:search' %}">Browse</a>
+    <a href="/admin/">Admin</a>
+  </nav>
+</header>
+
+<main class="container">
+  {% block content %}{% endblock %}
+</main>
+
+<footer class="site-footer">
+  <p>&copy; {{ now|date:"Y" }} Vacation Rentals.</p>
+</footer>
+
+</body>
+</html>

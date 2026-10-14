@@ -1,0 +1,19 @@
+<article class="card">
+  <a href="{% url 'property:detail' p.slug %}" class="card-image">
+    {% with img=p.images.first %}
+      {% if img %}
+        <img src="{{ img.image.url }}" alt="{{ img.alt_text|default:p.title }}">
+      {% else %}
+        <div class="card-noimage">No image</div>
+      {% endif %}
+    {% endwith %}
+  </a>
+  <div class="card-body">
+    <h3><a href="{% url 'property:detail' p.slug %}">{{ p.title|truncatechars:60 }}</a></h3>
+    <p class="muted">{{ p.location.city }}, {{ p.location.country }}</p>
+    <p class="card-meta">
+      <strong>${{ p.price|floatformat:0 }}</strong>/night
+      · {{ p.bedrooms }} bd · {{ p.bathrooms }} ba
+    </p>
+  </div>
+</article>

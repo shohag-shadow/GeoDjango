@@ -1,0 +1,50 @@
+{% extends "property/base.html" %}
+{% block title %}Search results{% endblock %}
+
+{% block content %}
+
+<section class="section">
+  <h1>Search stays</h1>
+
+  <form method="get" class="search-form">
+    <div class="search-grid">
+      <div class="field field-wide">{{ form.q.label_tag }}{{ form.q }}</div>
+      <div class="field">{{ form.location.label_tag }}{{ form.location }}</div>
+      <div class="field">{{ form.radius_km.label_tag }}{{ form.radius_km }}</div>
+      <div class="field">{{ form.property_type.label_tag }}{{ form.property_type }}</div>
+      <div class="field">{{ form.min_price.label_tag }}{{ form.min_price }}</div>
+      <div class="field">{{ form.max_price.label_tag }}{{ form.max_price }}</div>
+      <div class="field">{{ form.bedrooms.label_tag }}{{ form.bedrooms }}</div>
+      <div class="field">{{ form.bathrooms.label_tag }}{{ form.bathrooms }}</div>
+      <div class="field"><button class="btn btn-primary" type="submit">Search</button></div>
+    </div>
+  </form>
+</section>
+
+<section class="section">
+  <p class="muted">{{ total }} result{{ total|pluralize }}</p>
+
+  {% if page.object_list %}
+    <div class="grid grid-3">
+      {% for p in page.object_list %}
+        {% include "property/_card.html" with p=p %}
+      {% endfor %}
+    </div>
+
+    <nav class="pagination">
+      {% if page.has_previous %}
+        <a href="?{% querystring page=page.previous_page_number %}">&laquo; Prev</a>
+      {% endif %}
+
+      <span>Page {{ page.number }} of {{ page.paginator.num_pages }}</span>
+
+      {% if page.has_next %}
+        <a href="?{% querystring page=page.next_page_number %}">Next &raquo;</a>
+      {% endif %}
+    </nav>
+  {% else %}
+    <p>No properties match your search.</p>
+  {% endif %}
+</section>
+
+{% endblock %}
