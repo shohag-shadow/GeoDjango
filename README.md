@@ -75,26 +75,6 @@ The default admin account is created from `.env` — `admin` / `password123`
 the first run if you want different credentials, or edit the user later in the
 admin.
 
-### run.sh options
-
-```bash
-./run.sh --no-install    # skip pip install
-./run.sh --no-seed       # skip the data import
-./run.sh --no-server     # set everything up, don't start the server
-./run.sh -h              # help
-```
-
-Expose the dev server to other machines (needed for some remote previews):
-
-```bash
-SERVER_HOST=0.0.0.0 ./run.sh
-SERVER_PORT=8080 ./run.sh
-```
-
-The seed import can also be re-pointed with the `SEED_FILE`, `SEED_COUNTRY`,
-`SEED_STATE` and `SEED_CITY` environment variables (defaults:
-`data/listings.csv`, United States / New York / Albany).
-
 ## Manual setup
 
 ```bash
@@ -123,6 +103,13 @@ Settings are read from `.env` (via `django-environ`):
 | `DJANGO_SUPERUSER_PASSWORD` | `password123` | Admin password created on first setup |
 | `DJANGO_SUPERUSER_EMAIL` | `your_email@gmail.com` | Admin email created on first setup |
 
+## Data
+
+The sample dataset in `data/listings.csv` comes from
+[Inside Airbnb](https://insideairbnb.com/get-the-data/), which publishes
+Airbnb listing exports (CSV) for many cities. Any city's `listings.csv` can be
+downloaded from there and imported with the tooling described below.
+
 ## Importing listings
 
 ### Command line
@@ -140,20 +127,10 @@ embeddings.
 | Flag | Effect |
 | --- | --- |
 | `--country` / `--state` / `--city` | Where the file belongs (`--country` and `--city` required) |
-| `--dry-run` | Parse and validate everything, then roll back — nothing is written |
-| `--no-embed` | Import rows and geometry without building embeddings |
-| `--reembed` | Clear and rebuild embeddings for the location |
 
 Re-importing the same file updates existing listings instead of duplicating
-them; re-imports only embed listings that don't have an embedding yet unless
-`--reembed` is passed.
+them;
 
-### From the admin
-
-Open *Properties*, choose the action **"Import / update listings from a file"**,
-upload a file, fill in country/state/city and optionally tick *Rebuild
-embeddings*. The uploaded file is saved under `data/` so it can be re-imported
-from the command line too.
 
 ## Search
 
@@ -167,17 +144,7 @@ order:
 3. whatever text remains is ranked **semantically** against the listing
    embeddings.
 
-Examples:
 
-| Query | Result |
-| --- | --- |
-| `Albany` | Stays within ~25 km of Albany, nearest first |
-| `bbq 2 room king bed` | Best semantic matches (amenities, room layout, description) |
-| `Albany bbq 2 bedroom` | Filtered to Albany **and** ranked by "bbq 2 bedroom" |
-| `private room` | Stay-type filter matching every "Private room in ..." variant |
-
-The behind-the-scenes pipeline (thresholds, strategy cascades, autocomplete
-rules) is documented in [explanation.md](explanation.md#5-the-search-engine).
 
 ## API
 
@@ -188,8 +155,6 @@ rules) is documented in [explanation.md](explanation.md#5-the-search-engine).
 | `GET /api/properties/<slug>/nearby/` | Nearby stays (`radius_km`, `limit`) |
 | `GET /api/locations/` | Active places with `property_count` (`country` filter) |
 | `GET /api/locations/autocomplete/` | Search-bar suggestions (`q`, `limit`) |
-| `GET /api/health/` | Database / PostGIS / pgvector status |
-
 Example:
 
 ```bash
@@ -208,10 +173,7 @@ python manage.py test
 
 The test suite covers form/query validation, the import (CSV/Parquet/Excel and
 the admin upload flow), spatial helpers, semantic search, the merged search
-bar, the suggestion serializer, the HNSW indexes, and the distance math
-(asserted against a haversine on the stored coordinates). Embedding calls are
-patched with deterministic vectors, so the suite runs offline without
-downloading the model.
+bar, the suggestion serializer, the HNSW indexes, and the distance math.
 
 ## Project structure
 
@@ -222,12 +184,12 @@ property/             listings: models, search services, DRF API, views,
                       forms, admin, import command, templates, static
 property_image/       listing images (admin inline)
 embeddings.py         embedding model + document builders
-data/listings.csv     sample dataset (500 Albany, NY listings)
+data/listings.csv     sample dataset (500 Albany, NY listings, from
+                      https://insideairbnb.com/get-the-data/)
 docker/               Postgres init (PostGIS + pgvector extensions)
 Dockerfile            Postgres 17 + PostGIS + pgvector image
 docker-compose.yml    database service (host port 5442)
 run.sh                one-shot setup + launch
-explanation.md        how the project works, in depth
 ```
 
 ## Troubleshooting
