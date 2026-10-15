@@ -22,5 +22,14 @@
       <strong>${{ p.price|floatformat:0 }}</strong>/night
       · {{ p.bedrooms }} bd · {{ p.bathrooms }} ba
     </p>
+    {% if show_distance and p.distance %}
+      <p class="card-distance muted">
+        {% if p.distance.km < 1 %}
+          📍 {{ p.distance.m|floatformat:0 }} m away
+        {% else %}
+          📍 {{ p.distance.km|floatformat:1 }} km away
+        {% endif %}
+      </p>
+    {% endif %}
   </div>
 </article>

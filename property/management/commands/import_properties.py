@@ -10,7 +10,7 @@ from django.db import connection, transaction
 from django.utils.html import strip_tags
 from django.utils.text import slugify
 
-from embeddings import embed_texts
+from embeddings import embed_texts, location_document, property_document
 from location.models import Location
 from property.models import Property
 
@@ -144,10 +144,6 @@ def extract_bathrooms(row):
         return 0
 
 
-# ---------------------------------------------------------------------
-# Command
-# ---------------------------------------------------------------------
-
 class Command(BaseCommand):
     help = (
         "Import vacation-rental listings (CSV, Parquet or Excel) with "
@@ -221,7 +217,6 @@ class Command(BaseCommand):
 
         self._embed(location)
 
-    # ------------------------------------------------------------------
 
     def _location(self, country, state, city):
         slug = slugify(f"{country}-{state}-{city}")
@@ -247,9 +242,11 @@ class Command(BaseCommand):
             "description": clean(row.get("description")),
             "amenities": parse_amenities(row.get("amenities")),
             "property_type": clean(row.get("property_type")),
+            "room_type": clean(row.get("room_type")),
             "status": "for_rent",
             "price": parse_price(row.get("price")),
             "bedrooms": int_or_zero(row.get("bedrooms")),
+            "beds": int_or_zero(row.get("beds")),
             "bathrooms": extract_bathrooms(row),
             "address": clean(row.get("neighbourhood_cleansed")),
             "image_url": clean(row.get("picture_url"))[:500],
@@ -261,8 +258,6 @@ class Command(BaseCommand):
             defaults["point"] = point
 
         return Property.objects.update_or_create(slug=slug, defaults=defaults)
-
-    # ------------------------------------------------------------------
 
     def _location_geometry(self, location):
         """Set the location's representative point (centroid) and boundary (hull)."""
@@ -309,16 +304,10 @@ class Command(BaseCommand):
             f"{location.point.x:.4f}) boundary={'yes' if location.boundary else 'no'}"
         )
 
-    # ------------------------------------------------------------------
-
     def _embed(self, location):
-        # Keep the location vector focused on the place identity itself — mixing
-        # in dozens of neighbourhood names dilutes it and breaks queries like
-        # "Albany, New York". Neighbourhoods are carried by the *property*
-        # embeddings below instead, which is where they actually help.
-        location.embedding = embed_texts(
-            [f"{location.name}, {location.state}, {location.country}".strip(", ")]
-        )[0]
+        # Embed the place's name + full address chain so it can be found by
+        # semantic search (see embeddings.location_document).
+        location.embedding = embed_texts([location_document(location)])[0]
         location.save(update_fields=["embedding"])
 
         ids = list(Property.objects.filter(
@@ -330,17 +319,11 @@ class Command(BaseCommand):
 
         self.stdout.write(f"Embedding {len(ids)} properties...")
         for i in range(0, len(ids), 64):
-            batch = list(Property.objects.filter(id__in=ids[i : i + 64]))
-            vecs = embed_texts([
-                "\n\n".join(x for x in [
-                    p.title,
-                    f"{p.property_type} in {p.address + ', ' if p.address else ''}"
-                    f"{p.location.city}, {p.location.state}, {p.location.country}",
-                    " ".join(p.amenities or []),
-                    p.description,
-                ] if x)
-                for p in batch
-            ])
+            batch = list(
+                Property.objects.filter(id__in=ids[i : i + 64])
+                .select_related("location")
+            )
+            vecs = embed_texts([property_document(p) for p in batch])
             for p, v in zip(batch, vecs):
                 p.embedding = v
             Property.objects.bulk_update(batch, ["embedding"])

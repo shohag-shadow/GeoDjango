@@ -1,6 +1,7 @@
 import re
 
-from django.db.models import Count
+from django.contrib.gis.db.models.functions import Distance
+from django.db.models import Count, Q
 from pgvector.django import CosineDistance
 
 from embeddings import embed_texts
@@ -15,6 +16,10 @@ LOCATION_MATCH_MAX_DISTANCE = 0.45
 # Not user-configurable — a single, predictable default avoids an ambiguous
 # "radius" control in the UI.
 DEFAULT_RADIUS_KM = 25
+
+# Autocomplete only suggests a place when it is an actual text match or is
+# semantically close. Without this, the nearest city leaks into every keystroke.
+AUTOCOMPLETE_LOCATION_MAX_DISTANCE = 0.5
 
 # Fallback vocabulary when the database has no listings yet.
 DEFAULT_PROPERTY_TYPES = (
@@ -45,6 +50,52 @@ def semantic_locations(query: str, limit: int = 10):
     )
 
 
+def suggest_locations(query: str, limit: int = 8):
+    """
+    Destinations for the search-bar suggestion list.
+
+    Text matches (name/city contains the query) come first, then semantically
+    close places within ``AUTOCOMPLETE_LOCATION_MAX_DISTANCE``. A query with no
+    relevant place returns nothing, so properties can own the dropdown.
+    """
+    query = (query or "").strip()
+    if not query:
+        return Location.objects.none()
+
+    results = []
+    seen = set()
+
+    text_matches = (
+        Location.objects
+        .filter(is_active=True)
+        .filter(Q(name__icontains=query) | Q(city__icontains=query))
+        .order_by("name")[:limit]
+    )
+    for loc in text_matches:
+        results.append(loc)
+        seen.add(loc.pk)
+
+    if len(results) < limit:
+        vector = embed_texts([query])[0]
+        semantic = (
+            Location.objects
+            .filter(is_active=True, embedding__isnull=False)
+            .annotate(distance=CosineDistance("embedding", vector))
+            .order_by("distance")[: limit + len(seen)]
+        )
+        for loc in semantic:
+            if loc.pk in seen:
+                continue
+            if loc.distance is not None and loc.distance > AUTOCOMPLETE_LOCATION_MAX_DISTANCE:
+                break
+            results.append(loc)
+            seen.add(loc.pk)
+            if len(results) >= limit:
+                break
+
+    return results
+
+
 def semantic_properties(query: str, limit: int = 24):
     """Properties ranked by cosine similarity to `query`."""
     query = (query or "").strip()
@@ -61,6 +112,50 @@ def semantic_properties(query: str, limit: int = 24):
     )
 
 
+def suggest_properties(query: str, limit: int = 6):
+    """
+    Listings for the search-bar suggestion list, so typing a name shows the
+    property itself. Name matches come first (strongest intent), then semantic
+    neighbours fill the remaining slots.
+    """
+    query = (query or "").strip()
+    if not query:
+        return []
+
+    results = []
+    seen = set()
+
+    named = (
+        Property.objects
+        .active()
+        .filter(title__icontains=query)
+        .select_related("location")
+        .order_by("-is_featured", "-created_at")[:limit]
+    )
+    for prop in named:
+        results.append(prop)
+        seen.add(prop.pk)
+
+    if len(results) < limit:
+        vector = embed_texts([query])[0]
+        semantic = (
+            Property.objects
+            .active()
+            .semantic(vector)
+            .select_related("location")
+            [: limit + len(seen)]
+        )
+        for prop in semantic:
+            if prop.pk in seen:
+                continue
+            results.append(prop)
+            seen.add(prop.pk)
+            if len(results) >= limit:
+                break
+
+    return results
+
+
 # ---------------------------------------------------------------------
 # Merged search bar: one text input drives both location and free text
 # ---------------------------------------------------------------------
@@ -71,7 +166,9 @@ def resolve_location(text: str, threshold: float = LOCATION_MATCH_MAX_DISTANCE):
 
     1. Exact name/city match (most precise signal).
     2. Partial name/city match.
-    3. Semantic (pgvector cosine) match, accepted only below `threshold`.
+    3. Exact name/city match on any single token, so a place named among other
+       words still resolves ("Albany bbq 2 bedroom").
+    4. Semantic (pgvector cosine) match, accepted only below `threshold`.
     """
     text = (text or "").strip()
     if not text:
@@ -93,6 +190,19 @@ def resolve_location(text: str, threshold: float = LOCATION_MATCH_MAX_DISTANCE):
         )
         if partial is not None:
             return partial
+
+    # A place name can be mixed in among other search words
+    # ("Albany bbq 2 bedroom"): match any individual token exactly.
+    for token in text.split():
+        token = token.strip(",.!?;:-")
+        if len(token) < 3:
+            continue
+        token_match = (
+            Location.objects.filter(is_active=True, name__iexact=token).first()
+            or Location.objects.filter(is_active=True, city__iexact=token).first()
+        )
+        if token_match is not None:
+            return token_match
 
     best = list(
         Location.objects
@@ -198,9 +308,13 @@ def search_properties(
     """
     Single entry point for property search used by both the HTML view and the API.
 
-    The single search bar value (``q``) is interpreted as:
-      * a location/place (exact text, then semantic match) → spatial search, or
-      * free text describing a property → semantic vector search.
+    The single search bar value (``q``) may combine several intents in one
+    string — a place and/or a property type and/or free text about
+    amenities/rooms ("bbq 2 room king bed Albany"). We combine them instead of
+    picking just one:
+      * a resolved place (autocomplete pick or text match) → spatial filter, and
+      * any leftover words → semantic ranking over the property embeddings
+        (which cover the name, location, description, amenities and rooms).
 
     Returns ``(queryset, meta)`` where meta describes what the engine did.
     """
@@ -237,14 +351,23 @@ def search_properties(
         resolve_location(remaining) if remaining else None
     )
 
+    # Whatever is left once the place name is removed is free text that should
+    # still influence the ranking ("bbq", "2 room", "king bed", ...).
+    free_text = remaining
+    if resolved is not None:
+        for label in (resolved.name, resolved.city):
+            free_text = strip_phrase(free_text, label)
+
     if resolved is not None:
         strategy, qs = filter_by_location(qs, resolved, radius_km)
         meta.update(location=resolved, strategy=strategy)
+
+    if free_text.strip():
+        qs = qs.semantic(embed_texts([free_text])[0])
+        meta["semantic"] = True
         return qs, meta
 
-    if remaining:
-        qs = qs.semantic(embed_texts([remaining])[0])
-        meta["semantic"] = True
+    if resolved is not None:
         return qs, meta
 
     return qs.order_by("-is_featured", "-created_at"), meta
@@ -258,8 +381,10 @@ def nearby_properties(prop: Property, radius_km: int = 5, limit: int = 4):
     """
     PostGIS (DWithin) neighbours for a property's detail page.
 
-    Falls back to "same location" listings when the property has no point or
-    when nothing is close enough, so the section is never empty.
+    Every returned property is annotated with ``distance`` — how far it is
+    from the property being viewed — so the detail page can show it. Falls
+    back to "same location" listings when the property has no point or when
+    nothing is close enough, so the section is never empty.
     """
     qs = Property.objects.active().exclude(pk=prop.pk).select_related("location")
 
@@ -270,6 +395,9 @@ def nearby_properties(prop: Property, radius_km: int = 5, limit: int = 4):
         )
         if nearby:
             return nearby
+        # No neighbour within the radius: still rank the fallbacks by real
+        # distance from this property rather than dropping the annotation.
+        qs = qs.annotate(distance=Distance("point", prop.point))
 
     fallback = list(
         qs.filter(location=prop.location).order_by("-is_featured", "-created_at")[:limit]

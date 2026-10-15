@@ -1,9 +1,6 @@
-from django.contrib.gis.db.models.functions import Distance
 from django.core.paginator import Paginator
-from django.db import models
 from django.shortcuts import get_object_or_404, render
 
-from location.models import Location
 from property.forms import PropertySearchForm
 from property.models import Property
 from property.services import nearby_properties, search_properties
@@ -26,17 +23,9 @@ def home(request):
             .prefetch_related("images")[:6]
         )
 
-    popular_locations = (
-        Location.objects
-        .filter(is_active=True)
-        .annotate(property_count=models.Count("properties"))
-        .order_by("-property_count")[:8]
-    )
-
     return render(request, "property/home.html", {
         "form": PropertySearchForm(),
         "featured": featured,
-        "popular_locations": popular_locations,
     })
 
 
@@ -85,24 +74,13 @@ def detail(request, slug):
 
     images = list(prop.images.all())
 
-    distance_km = None
-    if prop.point and prop.location.point:
-        d = (
-            Property.objects
-            .filter(pk=prop.pk)
-            .annotate(dist=Distance("point", prop.location.point))
-            .values_list("dist", flat=True)
-            .first()
-        )
-        if d is not None:
-            distance_km = round(d.km, 2)
-
+    # Each neighbour is annotated with how far it is from *this* property; the
+    # template renders that distance on the nearby cards.
     nearby = nearby_properties(prop, radius_km=5, limit=4)
 
     return render(request, "property/detail.html", {
         "property": prop,
         "images": images,
-        "distance_km": distance_km,
         "nearby": nearby,
         # Kept for backwards compatibility with older templates.
         "similar": nearby,

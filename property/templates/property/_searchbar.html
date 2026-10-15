@@ -1,11 +1,11 @@
 {% comment %}
 Single merged search bar.
 
-One text input drives location/place search, property-type filtering and
-free-text (semantic) property search. While typing, the field suggests both
-matching destinations (semantic API) and property types; picking a destination
-stores its id in the hidden `location` field so the exact place is honoured,
-while picking a property type appends it to the bar (the backend parses it).
+One text input drives destination search, property-type filtering, free-text
+(semantic) search and — like a rentals homepage bar — direct listing
+suggestions. While typing, the field suggests matching property names,
+destinations and stay types. Picking a destination or a rental navigates to it;
+picking a stay type appends it to the bar (the backend parses it).
 {% endcomment %}
 <div class="field field-wide autocomplete-wrap">
   <label for="id_q">Where to?</label>
@@ -29,66 +29,97 @@ while picking a property type appends it to the bar (the backend parses it).
   if (!input || !results || !hidden) return;
 
   let timer = null;
+  let items = [];
+  let active = -1;
 
   input.addEventListener("input", () => {
-    // Typing invalidates a previously picked suggestion; the backend will
+    // Typing invalidates a previously picked destination; the backend will
     // resolve the text into a place (or fall back to semantic search).
     hidden.value = "";
     clearTimeout(timer);
     const q = input.value.trim();
-    if (!q) { results.hidden = true; return; }
-    timer = setTimeout(() => fetchLocations(q), 180);
+    if (!q) { close(); return; }
+    timer = setTimeout(() => fetchSuggestions(q), 180);
   });
 
-  async function fetchLocations(q) {
+  async function fetchSuggestions(q) {
     try {
       const res  = await fetch(`/api/locations/autocomplete/?q=${encodeURIComponent(q)}&limit=8`);
       const data = await res.json();
       render(data.results || []);
     } catch (err) {
-      results.hidden = true;
+      close();
     }
   }
 
-  function render(items) {
-    if (!items.length) { results.hidden = true; return; }
+  function render(list) {
+    items = list;
+    active = -1;
+    if (!list.length) { close(); return; }
     results.innerHTML = "";
-    items.forEach(item => {
-      const div = document.createElement("div");
-      div.className = "autocomplete-item";
 
-      const label = document.createElement("span");
-      label.textContent = item.label;
-      div.appendChild(label);
+    list.forEach((item, index) => {
+      // Text-only suggestions — just the name.
+      const row = document.createElement("div");
+      row.className = "autocomplete-item";
+      row.dataset.index = index;
+      row.textContent = item.label || item.name || "";
 
-      if (item.type === "property_type") {
-        const tag = document.createElement("span");
-        tag.className = "autocomplete-tag";
-        tag.textContent = "stay type";
-        div.appendChild(tag);
-      }
-
-      div.addEventListener("click", () => {
-        if (item.type === "property_type") {
-          // Append the type to the bar; the backend parses it out of `q`.
-          const base = input.value.replace(/,\s*$/, "").trim();
-          input.value = base ? `${base}, ${item.label}` : item.label;
-        } else {
-          input.value = item.label;
-          hidden.value = item.id;
-        }
-        results.hidden = true;
-      });
-      results.appendChild(div);
+      row.addEventListener("mouseenter", () => setActive(index));
+      row.addEventListener("mousedown", (e) => { e.preventDefault(); choose(item); });
+      results.appendChild(row);
     });
+
     results.hidden = false;
   }
 
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") results.hidden = true;
+  function setActive(index) {
+    const rows = results.querySelectorAll(".autocomplete-item");
+    if (!rows.length) return;
+    if (index < 0) index = rows.length - 1;
+    if (index >= rows.length) index = 0;
+    active = index;
+    rows.forEach((row, i) => row.classList.toggle("active", i === index));
+    rows[index].scrollIntoView({ block: "nearest" });
+  }
+
+  function choose(item) {
+    if (!item) return;
+    if (item.type === "property_type") {
+      // Append the type to the bar; the backend parses it out of `q`.
+      const base = input.value.replace(/,\s*$/, "").trim();
+      input.value = base ? `${base}, ${item.label}` : item.label;
+      hidden.value = "";
+      close();
+      input.focus();
+      return;
+    }
+    if (item.url) { window.location.href = item.url; return; }
+    input.value = item.label || item.name || "";
+    if (item.type === "location") hidden.value = item.id;
+    close();
+    input.focus();
+  }
+
+  function close() { results.hidden = true; active = -1; }
+
+  // Re-open the list with the keyboard when the field already has text.
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown" && results.hidden && input.value.trim()) {
+      fetchSuggestions(input.value.trim());
+    }
   });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { close(); return; }
+    if (results.hidden) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); setActive(active + 1); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActive(active - 1); }
+    else if (e.key === "Enter" && active >= 0) { e.preventDefault(); choose(items[active]); }
+  });
+
   document.addEventListener("click", (e) => {
-    if (!results.contains(e.target) && e.target !== input) results.hidden = true;
+    if (!results.contains(e.target) && e.target !== input) close();
   });
 })();
 </script>

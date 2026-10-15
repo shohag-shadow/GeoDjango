@@ -12,7 +12,7 @@ class LocationSerializer(serializers.ModelSerializer):
         model = Location
         fields = (
             "id", "name", "slug", "country", "state", "city",
-            "address", "is_active", "property_count",
+            "is_active", "property_count",
         )
 
 
@@ -42,9 +42,10 @@ class PropertySerializer(serializers.ModelSerializer):
         model = Property
         fields = (
             "id", "title", "slug", "description", "amenities",
-            "property_type", "status", "price", "bedrooms", "bathrooms",
-            "area_sqft", "address", "image_url", "latitude", "longitude",
-            "distance_km", "is_featured", "location", "images",
+            "property_type", "room_type", "status", "price", "bedrooms",
+            "beds", "bathrooms", "area_sqft", "address", "image_url",
+            "latitude", "longitude", "distance_km", "is_featured",
+            "location", "images",
         )
 
     def get_latitude(self, obj):

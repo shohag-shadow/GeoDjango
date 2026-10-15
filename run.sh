@@ -18,6 +18,11 @@
 #   ./run.sh --no-server     # set everything up but don't start the server
 #   ./run.sh -h | --help     # show this help
 #
+# The server binds to localhost by default (127.0.0.1). To expose it to other
+# machines on the network, override the host explicitly:
+#   SERVER_HOST=0.0.0.0 ./run.sh
+#   SERVER_PORT=8080 ./run.sh
+#
 set -euo pipefail
 
 
@@ -25,7 +30,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 VENV_DIR="${VENV_DIR:-.venv}"
-SERVER_HOST="${SERVER_HOST:-0.0.0.0}"
+SERVER_HOST="${SERVER_HOST:-127.0.0.1}"
 SERVER_PORT="${SERVER_PORT:-8000}"
 
 SEED_FILE="${SEED_FILE:-data/listings.csv}"

@@ -12,12 +12,6 @@
       <strong>{{ property.location.city }}</strong>,
       {{ property.location.country }}
     </p>
-
-    {% if distance_km is not None %}
-      <p class="distance-badge">
-        📍 {{ distance_km }} km from {{ property.location.city }} city centre
-      </p>
-    {% endif %}
   </header>
 
   {% if images %}
@@ -82,10 +76,12 @@
   {% if nearby %}
     <section class="section">
       <h2>Nearby stays</h2>
-      <p class="muted">Properties close to {{ property.location.city }} (PostGIS distance search)</p>
+      <p class="muted">
+        How far each of these is from {{ property.title }} (PostGIS distance search)
+      </p>
       <div class="grid grid-3">
         {% for p in nearby %}
-          {% include "property/_card.html" with p=p %}
+          {% include "property/_card.html" with p=p show_distance=True %}
         {% endfor %}
       </div>
     </section>

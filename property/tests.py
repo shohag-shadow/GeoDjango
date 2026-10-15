@@ -4,11 +4,15 @@ from unittest.mock import patch
 
 import pandas as pd
 from django.conf import settings
+from django.contrib.auth.models import User
 from django.contrib.gis.geos import MultiPolygon, Point, Polygon
-from django.test import TestCase
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import TestCase, override_settings
 from django.urls import reverse
 
+from embeddings import location_document, property_document
 from location.models import Location
+from property.admin import ListingsImportForm
 from property.forms import PropertySearchForm
 from property.management.commands.import_properties import read_dataframe
 from property.models import Property
@@ -444,3 +448,310 @@ class HnswIndexTests(TestCase):
             self.assertIn(name, found, f"missing index {name}")
             self.assertIn("hnsw", found[name].lower())
             self.assertIn("vector_cosine_ops", found[name].lower())
+
+
+class ModelLayoutTests(TestCase):
+    """Location is place-only; listing-specific room data lives on Property."""
+
+    def test_location_has_no_duplicated_address_field(self):
+        from django.core.exceptions import FieldDoesNotExist
+
+        with self.assertRaises(FieldDoesNotExist):
+            Location._meta.get_field("address")
+
+    def test_property_stores_room_layout_for_search(self):
+        for field in ("room_type", "beds"):
+            self.assertIsNotNone(Property._meta.get_field(field))
+        self.assertIn("room_type", [f.name for f in Property._meta.get_fields()])
+
+
+class EmbeddingDocumentTests(TestCase):
+    """The embedded text must cover name, location, about, amenities and rooms."""
+
+    def setUp(self):
+        self.location = Location.objects.create(
+            name="Albany", slug="albany", country="United States",
+            state="New York", city="Albany",
+        )
+        self.prop = Property.objects.create(
+            location=self.location, title="Cozy BBQ Loft", slug="cozy-bbq-loft",
+            status=Property.Status.FOR_RENT, price=120,
+            property_type="Entire rental unit", room_type="Entire home/apt",
+            bedrooms=2, beds=2, bathrooms=1,
+            amenities=["BBQ grill", "Kitchen"],
+            description="A lovely loft with a king bed and a private balcony.",
+        )
+
+    def test_location_document_has_name_and_place(self):
+        text = location_document(self.location)
+        for token in ("Albany", "New York", "United States"):
+            self.assertIn(token, text)
+
+    def test_property_document_covers_all_searchable_fields(self):
+        text = property_document(self.prop)
+        self.assertIn("Cozy BBQ Loft", text)          # name
+        self.assertIn("Albany", text)                  # location
+        self.assertIn("BBQ grill", text)               # amenities
+        self.assertIn("2 bedrooms", text)              # rooms
+        self.assertIn("king bed", text)                # about this place
+
+
+class CombinedSearchTests(TestCase):
+    """A single query mixes a place with amenities/rooms and still ranks semantically."""
+
+    def setUp(self):
+        self.location = Location.objects.create(
+            name="Beach Town", slug="beach-town", country="USA", city="Beach",
+            point=Point(-73.77, 42.65, srid=4326), embedding=vec(0),
+        )
+        Property.objects.create(
+            location=self.location, title="BBQ Loft", slug="bbq-loft",
+            status=Property.Status.FOR_RENT, price=150,
+            amenities=["BBQ grill"], point=Point(-73.78, 42.66, srid=4326),
+            embedding=vec(1),
+        )
+
+    @patch("property.services.embed_texts", return_value=[vec(1)])
+    def test_place_plus_free_text_uses_spatial_and_semantic(self, _mock):
+        # The place token is found even without a semantic location hit
+        # (vec(1) is far from the location's vec(0) embedding).
+        response = self.client.get(
+            reverse("property:api_properties"),
+            {"q": "Beach bbq 2 room king bed"},
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["spatial"], "dwithin")
+        self.assertTrue(body["semantic"])
+        self.assertEqual(body["results"][0]["slug"], "bbq-loft")
+
+    @patch("property.services.embed_texts", return_value=[vec(1)])
+    def test_free_text_only_finds_semantic_matches(self, _mock):
+        response = self.client.get(
+            reverse("property:api_properties"), {"q": "bbq 2 room king bed"}
+        )
+        body = response.json()
+        self.assertTrue(body["semantic"])
+        self.assertIsNone(body["resolved_location"])
+        self.assertEqual(body["results"][0]["slug"], "bbq-loft")
+
+
+class NearbyDistanceTests(TestCase):
+    """Distance to each nearby place is shown on the detail page, not as a badge."""
+
+    def setUp(self):
+        self.location = Location.objects.create(
+            name="Beach Town", slug="beach-town", country="USA", city="Beach",
+            point=Point(-73.77, 42.65, srid=4326), embedding=vec(0),
+        )
+        self.prop = Property.objects.create(
+            location=self.location, title="Beach House", slug="beach-house",
+            status=Property.Status.FOR_RENT, price=150,
+            point=Point(-73.78, 42.66, srid=4326), embedding=vec(1),
+        )
+        self.neighbour = Property.objects.create(
+            location=self.location, title="Neighbour House", slug="neighbour-house",
+            status=Property.Status.FOR_RENT, price=120,
+            point=Point(-73.79, 42.67, srid=4326), embedding=vec(2),
+        )
+
+    def test_nearby_properties_are_annotated_with_distance(self):
+        from property.services import nearby_properties
+
+        neighbours = list(nearby_properties(self.prop, radius_km=5, limit=4))
+        self.assertTrue(neighbours)
+        self.assertIsNotNone(getattr(neighbours[0], "distance", None))
+
+    def test_nearby_distance_matches_lat_lon_haversine(self):
+        """The stored distance must agree with a haversine on the coordinates."""
+        from math import asin, cos, radians, sin, sqrt
+
+        from property.services import nearby_properties
+
+        neighbour = list(nearby_properties(self.prop, radius_km=5, limit=4))[0]
+        a, b = self.prop.point, neighbour.point
+        dlat, dlon = radians(b.y - a.y), radians(b.x - a.x)
+        h = sin(dlat / 2) ** 2 + cos(radians(a.y)) * cos(radians(b.y)) * sin(dlon / 2) ** 2
+        expected_km = 2 * 6371.0088 * asin(sqrt(h))
+        self.assertAlmostEqual(neighbour.distance.km, expected_km, delta=0.01)
+
+    def test_very_close_neighbour_is_shown_in_metres(self):
+        # ~70 m from self.prop, so it must not read as "0.0 km".
+        Property.objects.create(
+            location=self.location, title="Next Door", slug="next-door",
+            status=Property.Status.FOR_RENT, price=100,
+            point=Point(-73.7805, 42.6605, srid=4326),
+        )
+        html = self.client.get(
+            reverse("property:detail", args=[self.prop.slug])
+        ).content.decode()
+        self.assertIn("m away", html)
+
+    def test_detail_page_shows_distance_on_nearby_cards(self):
+        html = self.client.get(
+            reverse("property:detail", args=[self.prop.slug])
+        ).content.decode()
+        self.assertIn("Neighbour House", html)
+        self.assertIn("km away", html)
+
+    def test_detail_page_has_no_city_centre_distance_badge(self):
+        html = self.client.get(
+            reverse("property:detail", args=[self.prop.slug])
+        ).content.decode()
+        self.assertNotIn("city centre", html)
+        self.assertNotIn("distance-badge", html)
+
+
+class HomePageTests(TestCase):
+    def test_home_page_has_no_popular_destinations(self):
+        Location.objects.create(
+            name="Albany", slug="albany", country="USA", city="Albany",
+        )
+        html = self.client.get(reverse("property:home")).content.decode()
+        self.assertNotIn("Popular destinations", html)
+
+
+class ListingsImportAdminTests(TestCase):
+    """Admin can update the listings data from an uploaded file."""
+
+    CSV = (
+        "id,name,description,neighbourhood_cleansed,latitude,longitude,"
+        "property_type,room_type,bedrooms,beds,bathrooms_text,amenities,price,picture_url\n"
+        '1,Cozy BBQ Loft,A lovely loft with a king bed,THIRD WARD,42.65,-73.77,'
+        'Entire rental unit,Entire home/apt,2,2,1 bath,"[""BBQ grill"", ""Kitchen""]",'
+        "120.0,https://example.com/a.jpg\n"
+    )
+
+    def setUp(self):
+        self.admin = User.objects.create_superuser(
+            "admin", "admin@example.com", "password",
+        )
+        self.client.force_login(self.admin)
+
+    def test_action_is_registered(self):
+        from property.admin import PropertyAdmin
+
+        self.assertIn("import_listings", PropertyAdmin.actions)
+
+    def test_form_rejects_unsupported_file_type(self):
+        form = ListingsImportForm(
+            data={"country": "USA", "state": "", "city": "Albany"},
+            files={"file": SimpleUploadedFile("listings.json", b"{}")},
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("file", form.errors)
+
+    def test_import_page_renders_file_input(self):
+        response = self.client.get(reverse("admin:property_property_import"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'type="file"')
+
+    def test_post_imports_listings_and_updates_the_data_file(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                override_settings(BASE_DIR=Path(tmp)), \
+                patch(
+                    "property.management.commands.import_properties.embed_texts",
+                    return_value=[vec(0)],
+                ):
+            upload = SimpleUploadedFile(
+                "listings.csv", self.CSV.encode(), content_type="text/csv",
+            )
+            response = self.client.post(
+                reverse("admin:property_property_import"),
+                {
+                    "file": upload,
+                    "country": "United States",
+                    "state": "New York",
+                    "city": "Albany",
+                    "reembed": "on",
+                },
+            )
+            self.assertEqual(response.status_code, 302)
+            self.assertTrue(Property.objects.filter(title="Cozy BBQ Loft").exists())
+            saved = Path(tmp) / "data" / "listings.csv"
+            self.assertTrue(saved.exists(), "uploaded file should update data/")
+
+    def test_import_stores_room_fields(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                override_settings(BASE_DIR=Path(tmp)), \
+                patch(
+                    "property.management.commands.import_properties.embed_texts",
+                    return_value=[vec(0)],
+                ):
+            self.client.post(
+                reverse("admin:property_property_import"),
+                {
+                    "file": SimpleUploadedFile(
+                        "listings.csv", self.CSV.encode(), content_type="text/csv",
+                    ),
+                    "country": "United States",
+                    "state": "New York",
+                    "city": "Albany",
+                },
+            )
+            prop = Property.objects.get(title="Cozy BBQ Loft")
+            self.assertEqual(prop.room_type, "Entire home/apt")
+            self.assertEqual(prop.beds, 2)
+            self.assertEqual(prop.amenities, ["BBQ grill", "Kitchen"])
+
+
+class SearchSuggestionTests(TestCase):
+    """The search bar suggests matching listing names (and their locations)."""
+
+    def setUp(self):
+        self.location = Location.objects.create(
+            name="Beach Town", slug="beach-town", country="USA", city="Beach",
+            point=Point(-73.77, 42.65, srid=4326), embedding=vec(0),
+        )
+        self.prop = Property.objects.create(
+            location=self.location, title="Beach House", slug="beach-house",
+            status=Property.Status.FOR_RENT, price=150,
+            image_url="https://example.com/a.jpg",
+            point=Point(-73.78, 42.66, srid=4326), embedding=vec(1),
+        )
+
+    @patch("property.services.embed_texts", return_value=[vec(0)])
+    def test_autocomplete_includes_property_name_and_link(self, _mock):
+        results = self.client.get(
+            reverse("property:api_autocomplete_locations"), {"q": "beach"}
+        ).json()["results"]
+        props = [r for r in results if r["type"] == "property"]
+        self.assertTrue(props, "property name should be suggested")
+        self.assertEqual(props[0]["name"], "Beach House")
+        self.assertEqual(
+            props[0]["url"],
+            reverse("property:detail", args=["beach-house"]),
+        )
+
+    @patch("property.services.embed_texts", return_value=[vec(0)])
+    def test_autocomplete_locations_link_to_a_destination_search(self, _mock):
+        results = self.client.get(
+            reverse("property:api_autocomplete_locations"), {"q": "beach"}
+        ).json()["results"]
+        locs = [r for r in results if r["type"] == "location"]
+        self.assertTrue(locs)
+        self.assertIn("?location=", locs[0]["url"])
+
+    @patch("property.services.embed_texts", return_value=[vec(0)])
+    def test_autocomplete_returns_matching_property_by_name(self, _mock):
+        results = self.client.get(
+            reverse("property:api_autocomplete_locations"), {"q": "Beach House"}
+        ).json()["results"]
+        names = [r["name"] for r in results]
+        self.assertIn("Beach House", names)
+
+    def test_empty_query_lists_destinations_only(self):
+        results = self.client.get(
+            reverse("property:api_autocomplete_locations")
+        ).json()["results"]
+        self.assertTrue(results)
+        self.assertTrue(all(r["type"] == "location" for r in results))
+
+    @patch("property.services.embed_texts", return_value=[vec(1)])
+    def test_unrelated_query_does_not_leak_a_destination(self, _mock):
+        # vec(1) is far from the location's vec(0) embedding, and the text does
+        # not contain the place name, so no destination should be suggested.
+        results = self.client.get(
+            reverse("property:api_autocomplete_locations"), {"q": "zzz unrelated"}
+        ).json()["results"]
+        self.assertFalse([r for r in results if r["type"] == "location"])

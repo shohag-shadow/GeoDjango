@@ -1,5 +1,14 @@
-from django.contrib import admin
+import io
+from pathlib import Path
+
+from django import forms
+from django.conf import settings
+from django.contrib import admin, messages
 from django.contrib.gis.admin import GISModelAdmin
+from django.core.management import call_command
+from django.http import HttpResponseRedirect
+from django.shortcuts import render
+from django.urls import path, reverse
 from django.utils.html import format_html
 
 from property_image.models import PropertyImage
@@ -71,6 +80,40 @@ class EmbeddingStatusFilter(admin.SimpleListFilter):
         return queryset
 
 
+SUPPORTED_SUFFIXES = {
+    ".csv", ".txt", ".tsv", ".parquet", ".pq",
+    ".xlsx", ".xls", ".xlsm",
+}
+
+
+class ListingsImportForm(forms.Form):
+    """Upload a listings file and (re)import it into a location."""
+
+    file = forms.FileField(
+        label="Listings file",
+        help_text="CSV, TSV, Parquet or Excel",
+    )
+    country = forms.CharField(max_length=100, initial="United States")
+    state = forms.CharField(max_length=100, initial="New York", required=False)
+    city = forms.CharField(max_length=100, initial="Albany")
+    reembed = forms.BooleanField(
+        required=False,
+        initial=True,
+        label="Rebuild embeddings",
+        help_text="Recreate the semantic-search vectors for this location after import.",
+    )
+
+    def clean_file(self):
+        uploaded = self.cleaned_data["file"]
+        suffix = Path(uploaded.name).suffix.lower()
+        if suffix not in SUPPORTED_SUFFIXES:
+            raise forms.ValidationError(
+                f"Unsupported file type '{suffix or uploaded.name}'. "
+                "Use CSV, TSV, Parquet or Excel."
+            )
+        return uploaded
+
+
 class PropertyImageInline(admin.TabularInline):
     model = PropertyImage
     extra = 1
@@ -107,12 +150,87 @@ class PropertyAdmin(GISModelAdmin):
     inlines = [PropertyImageInline]
     fieldsets = (
         (None, {"fields": ("title", "slug", "location", "is_active", "is_featured")}),
-        ("Listing", {"fields": ("property_type", "status", "price")}),
-        ("Details", {"fields": ("bedrooms", "bathrooms", "area_sqft", "amenities", "description")}),
+        ("Listing", {"fields": ("property_type", "room_type", "status", "price")}),
+        ("Details", {"fields": ("bedrooms", "beds", "bathrooms", "area_sqft", "amenities", "description")}),
         ("Location", {"fields": ("address", "point", "footprint")}),
         ("Timestamps", {"fields": ("created_at", "updated_at"), "classes": ("collapse",)}),
     )
-    actions = ["mark_active", "mark_inactive", "mark_featured"]
+    actions = [
+        "import_listings",
+        "mark_active", "mark_inactive", "mark_featured",
+    ]
+
+    # ------------------------------------------------------------------
+    # Listings file import (CSV / TSV / Parquet / Excel)
+    # ------------------------------------------------------------------
+    def get_urls(self):
+        custom = [
+            path(
+                "import-file/",
+                self.admin_site.admin_view(self.import_file_view),
+                name="property_property_import",
+            ),
+        ]
+        return custom + super().get_urls()
+
+    @admin.action(description="Import / update listings from a file")
+    def import_listings(self, request, queryset):
+        """Open the listings-file upload page."""
+        return HttpResponseRedirect(reverse("admin:property_property_import"))
+
+    def import_file_view(self, request):
+        opts = self.model._meta
+        if request.method == "POST":
+            form = ListingsImportForm(request.POST, request.FILES)
+            if form.is_valid():
+                data = form.cleaned_data
+                saved_path = self._save_upload(data["file"])
+                stdout = io.StringIO()
+                try:
+                    call_command(
+                        "import_properties",
+                        str(saved_path),
+                        country=data["country"],
+                        state=data["state"],
+                        city=data["city"],
+                        reembed=data["reembed"],
+                        stdout=stdout,
+                    )
+                except Exception as exc:  # surface a readable error in admin
+                    self.message_user(
+                        request, f"Import failed: {exc}", level=messages.ERROR,
+                    )
+                else:
+                    summary = stdout.getvalue().strip().splitlines()
+                    self.message_user(
+                        request,
+                        f"Imported '{saved_path.name}'. "
+                        + (summary[-1] if summary else ""),
+                        level=messages.SUCCESS,
+                    )
+                    return HttpResponseRedirect(
+                        reverse("admin:property_property_changelist")
+                    )
+        else:
+            form = ListingsImportForm()
+
+        context = {
+            **self.admin_site.each_context(request),
+            "title": "Import / update listings",
+            "form": form,
+            "opts": opts,
+        }
+        return render(request, "admin/property/import_listings.html", context)
+
+    def _save_upload(self, uploaded):
+        """Persist the uploaded file under data/ so it can be re-imported."""
+        target_dir = Path(settings.BASE_DIR) / "data"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / Path(uploaded.name).name
+        with target.open("wb") as fh:
+            for chunk in uploaded.chunks():
+                fh.write(chunk)
+        return target
 
     @admin.display(description="City", ordering="location__city")
     def city(self, obj):

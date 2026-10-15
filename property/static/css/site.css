@@ -259,6 +259,11 @@ a:hover {
     color: var(--accent);
 }
 
+.card-distance {
+    font-size: 0.85rem;
+    margin: 0.35rem 0 0;
+}
+
 .muted {
     color: var(--muted);
 }
@@ -320,16 +325,6 @@ a:hover {
     font-size: 2rem;
     margin: 0 0 0.5rem;
     color: var(--fg-strong);
-}
-
-.distance-badge {
-    display: inline-block;
-    background: var(--badge-bg);
-    border: 1px solid var(--badge-border);
-    color: var(--badge-fg);
-    padding: 0.4rem 0.8rem;
-    border-radius: 8px;
-    font-size: 0.9rem;
 }
 
 .gallery {
@@ -477,29 +472,17 @@ select.form-select {
     font-size: 0.9rem;
     color: var(--fg);
     border-bottom: 1px solid var(--border);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 0.75rem;
-}
-
-.autocomplete-tag {
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-    color: var(--badge-fg);
-    background: var(--badge-bg);
-    border: 1px solid var(--badge-border);
-    border-radius: 999px;
-    padding: 0.1rem 0.5rem;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .autocomplete-item:last-child {
     border-bottom: none;
 }
 
-.autocomplete-item:hover {
+.autocomplete-item:hover,
+.autocomplete-item.active {
     background: var(--card-hover);
     color: var(--accent-hover);
 }

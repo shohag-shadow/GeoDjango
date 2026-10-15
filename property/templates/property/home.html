@@ -27,19 +27,4 @@
 </section>
 {% endif %}
 
-{% if popular_locations %}
-<section class="section">
-  <h2>Popular destinations</h2>
-  <ul class="pill-list">
-    {% for loc in popular_locations %}
-      <li>
-        <a href="{% url 'property:search' %}?location={{ loc.pk }}" class="pill">
-          {{ loc.name }} <span class="muted">({{ loc.property_count }})</span>
-        </a>
-      </li>
-    {% endfor %}
-  </ul>
-</section>
-{% endif %}
-
 {% endblock %}

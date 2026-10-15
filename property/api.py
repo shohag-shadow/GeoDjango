@@ -4,8 +4,11 @@ Django REST Framework endpoints.
 These power both the JSON API and the front-end autocomplete widget that the
 templates call via ``fetch()``.
 """
+from itertools import zip_longest
+
 from django.core.paginator import Paginator
 from django.shortcuts import get_object_or_404
+from django.urls import reverse
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -22,24 +25,36 @@ from property.serializers import (
 from property.services import (
     nearby_properties,
     search_properties,
-    semantic_locations,
+    suggest_locations,
+    suggest_properties,
     suggest_property_types,
 )
 
 
 def _serialize_location(loc):
-    label = ", ".join(p for p in [loc.city, loc.state, loc.country] if p)
     return {
         "id": loc.pk,
         "type": "location",
         "value": loc.pk,
         "name": loc.name,
-        "city": loc.city,
-        "state": loc.state,
-        "country": loc.country,
-        "label": label or loc.name,
+        "label": loc.name,
         "slug": loc.slug,
+        "url": f"{reverse('property:search')}?location={loc.pk}",
         "score": round(loc.distance, 4) if hasattr(loc, "distance") else None,
+    }
+
+
+def _serialize_property(prop):
+    """A listing suggestion — clicking it opens the property page."""
+    return {
+        "id": prop.pk,
+        "type": "property",
+        "value": prop.slug,
+        "name": prop.title,
+        "label": prop.title,
+        "slug": prop.slug,
+        "url": reverse("property:detail", args=[prop.slug]),
+        "score": None,
     }
 
 
@@ -50,10 +65,8 @@ def _serialize_property_type(value):
         "value": value,
         "name": value,
         "label": value,
-        "city": "",
-        "state": "",
-        "country": "",
         "slug": None,
+        "url": None,
         "score": None,
     }
 
@@ -62,8 +75,9 @@ class LocationAutocompleteAPIView(APIView):
     """
     GET /api/locations/autocomplete/?q=<text>&limit=<n>
 
-    Semantic (pgvector) location lookup. Empty ``q`` falls back to the
-    alphabetical list so the widget can show initial suggestions.
+    Rentals-style suggestion list: matching property names, destinations and
+    stay types, all in one dropdown. Empty ``q`` falls back to the alphabetical
+    destination list so the widget can show initial suggestions.
     """
 
     def get(self, request):
@@ -72,19 +86,26 @@ class LocationAutocompleteAPIView(APIView):
         query = (params.validated_data.get("q") or "").strip()
         limit = params.validated_data["limit"]
 
-        results = []
-
-        # Property types come first — they are exact vocabulary matches.
-        if query:
-            results.extend(
-                _serialize_property_type(pt)
-                for pt in suggest_property_types(query, limit=limit)
-            )
-            locs = semantic_locations(query, limit=limit)
-        else:
+        if not query:
             locs = Location.objects.filter(is_active=True).order_by("name")[:limit]
+            return Response({
+                "query": query,
+                "results": [_serialize_location(loc) for loc in locs],
+            })
 
-        results.extend(_serialize_location(loc) for loc in locs)
+        # Stay types first (exact vocabulary), then destinations and rentals
+        # interleaved so a matching property name is never pushed off the list.
+        results = [
+            _serialize_property_type(pt)
+            for pt in suggest_property_types(query, limit=2)
+        ]
+        locations = list(suggest_locations(query, limit=limit))
+        properties = list(suggest_properties(query, limit=limit))
+        for loc, prop in zip_longest(locations, properties):
+            if loc is not None:
+                results.append(_serialize_location(loc))
+            if prop is not None:
+                results.append(_serialize_property(prop))
 
         return Response({
             "query": query,
