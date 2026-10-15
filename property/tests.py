@@ -164,6 +164,24 @@ class APITests(TestCase):
         body = response.json()
         self.assertEqual(body["results"][0]["slug"], "beach-town")
 
+    @patch("property.services.embed_texts", return_value=[vec(0)])
+    def test_autocomplete_items_match_the_suggestion_serializer(self, _mock):
+        body = self.client.get(
+            reverse("property:api_autocomplete_locations"), {"q": "beach"}
+        ).json()
+        item = body["results"][0]
+        self.assertEqual(
+            set(item),
+            {"id", "type", "value", "name", "label", "slug", "url", "score"},
+        )
+        self.assertIn(item["type"], ("location", "property", "property_type"))
+        self.assertIsInstance(item["id"], str)  # coerced by CharField
+
+    def test_locations_endpoint_populates_property_count(self):
+        body = self.client.get(reverse("property:api_locations")).json()
+        self.assertEqual(body["count"], 1)
+        self.assertEqual(body["results"][0]["property_count"], 1)
+
     def test_property_search_rejects_invalid_payload(self):
         response = self.client.get(
             reverse("property:api_properties"), {"min_price": 500, "max_price": 100}

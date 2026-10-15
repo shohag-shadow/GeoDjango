@@ -6,6 +6,8 @@ from property_image.models import PropertyImage
 
 
 class LocationSerializer(serializers.ModelSerializer):
+    # Only present when the queryset annotates it (see LocationListAPIView);
+    # omitted elsewhere so nested locations don't trigger extra queries.
     property_count = serializers.IntegerField(read_only=True, required=False)
 
     class Meta:
@@ -112,6 +114,26 @@ class PropertySearchQuerySerializer(serializers.Serializer):
                 {"max_price": "Maximum price must be greater than minimum price."}
             )
         return attrs
+
+
+class SearchSuggestionSerializer(serializers.Serializer):
+    """
+    Output serializer for one row of the search-bar suggestion list.
+
+    The autocomplete endpoint mixes three kinds of items (destinations,
+    rentals and stay types); this documents and validates their shared shape.
+    """
+
+    TYPE_CHOICES = ("location", "property", "property_type")
+
+    id = serializers.CharField()
+    type = serializers.ChoiceField(choices=TYPE_CHOICES)
+    value = serializers.CharField()
+    name = serializers.CharField()
+    label = serializers.CharField()
+    slug = serializers.CharField(allow_null=True, required=False)
+    url = serializers.CharField(allow_null=True, required=False)
+    score = serializers.FloatField(allow_null=True, required=False)
 
 
 class AutocompleteQuerySerializer(serializers.Serializer):

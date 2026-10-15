@@ -7,6 +7,7 @@ templates call via ``fetch()``.
 from itertools import zip_longest
 
 from django.core.paginator import Paginator
+from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
 from rest_framework import status
@@ -21,6 +22,7 @@ from property.serializers import (
     NearbyQuerySerializer,
     PropertySearchQuerySerializer,
     PropertySerializer,
+    SearchSuggestionSerializer,
 )
 from property.services import (
     nearby_properties,
@@ -88,10 +90,10 @@ class LocationAutocompleteAPIView(APIView):
 
         if not query:
             locs = Location.objects.filter(is_active=True).order_by("name")[:limit]
-            return Response({
-                "query": query,
-                "results": [_serialize_location(loc) for loc in locs],
-            })
+            serializer = SearchSuggestionSerializer(
+                [_serialize_location(loc) for loc in locs], many=True,
+            )
+            return Response({"query": query, "results": serializer.data})
 
         # Stay types first (exact vocabulary), then destinations and rentals
         # interleaved so a matching property name is never pushed off the list.
@@ -107,10 +109,8 @@ class LocationAutocompleteAPIView(APIView):
             if prop is not None:
                 results.append(_serialize_property(prop))
 
-        return Response({
-            "query": query,
-            "results": results[:limit],
-        })
+        serializer = SearchSuggestionSerializer(results[:limit], many=True)
+        return Response({"query": query, "results": serializer.data})
 
 
 class PropertySearchAPIView(APIView):
@@ -195,15 +195,20 @@ class NearbyPropertiesAPIView(APIView):
 
 
 class LocationListAPIView(APIView):
-    """GET /api/locations/ — active locations, optionally filtered by boundary intersect."""
+    """GET /api/locations/ — active locations, optionally filtered by country."""
 
     def get(self, request):
         qs = Location.objects.filter(is_active=True)
         country = request.query_params.get("country")
         if country:
             qs = qs.filter(country__iexact=country)
+        count = qs.count()
+        # Annotate so LocationSerializer.property_count is actually populated.
+        qs = qs.annotate(
+            property_count=Count("properties", filter=Q(properties__is_active=True))
+        )
         serializer = LocationSerializer(qs.order_by("name"), many=True)
-        return Response({"count": qs.count(), "results": serializer.data})
+        return Response({"count": count, "results": serializer.data})
 
 
 class HealthAPIView(APIView):

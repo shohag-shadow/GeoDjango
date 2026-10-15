@@ -8,8 +8,9 @@
 #   3. Create .env from .env.example (first run only)
 #   4. Start PostgreSQL (PostGIS + pgvector) via docker compose and wait for it
 #   5. Apply Django migrations
-#   6. Seed the database from data/listings.csv (first run only, with embeddings)
-#   7. Start the Django development server
+#   6. Create the admin superuser from .env (first run only)
+#   7. Seed the database from data/listings.csv (first run only, with embeddings)
+#   8. Start the Django development server
 #
 # Usage:
 #   ./run.sh                 # full setup + run server
@@ -149,6 +150,28 @@ fi
 step "Applying database migrations"
 python manage.py migrate --noinput
 ok "Migrations applied"
+
+
+step "Creating admin user"
+
+if [[ -z "${DJANGO_SUPERUSER_USERNAME:-}" || -z "${DJANGO_SUPERUSER_PASSWORD:-}" ]]; then
+  warn "No DJANGO_SUPERUSER_USERNAME/PASSWORD in .env — skipping admin user"
+else
+  admin_exists="$(python manage.py shell -c "
+from django.contrib.auth import get_user_model
+import os
+print('yes' if get_user_model().objects.filter(
+    username=os.environ.get('DJANGO_SUPERUSER_USERNAME', '')
+).exists() else 'no')
+" | tail -n1)"
+
+  if [[ "$admin_exists" == "yes" ]]; then
+    ok "Admin user '$DJANGO_SUPERUSER_USERNAME' already exists"
+  else
+    python manage.py createsuperuser --noinput
+    ok "Admin user '$DJANGO_SUPERUSER_USERNAME' created"
+  fi
+fi
 
 
 step "Seeding data"
